@@ -26,6 +26,8 @@ license: MIT
 * `references/japanese_candlestick_techniques.md` (微观战术：蜡烛图反转信号、买卖临界点)
 * `references/practical_a_share_trading.md` (A股实战：20日均线生命线、量价配合、右侧交易)
 * `references/livermore_wisdom.md` (作手大局观：最小阻力线、盈利加仓、耐心等待)
+* `references/ruler_rule_trend_channel.md` (趋势通道：直尺法则、上涨看支撑、下跌看压力)
+* `references/chip_distribution_analysis.md` (筹码博弈：主力吸筹/出货识别、四大筹码形态)
 
 ### Step 2: 获取个股基础数据 (Data Retrieval - Optional)
 如果用户提供了具体的A股股票代码（如 `600519`），你可以选择运行工具脚本来获取当前的客观技术指标（这能帮助你验证用户所说的“趋势”是否属实）：

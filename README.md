@@ -16,9 +16,11 @@
 .
 ├── SKILL.md             # 技能主指令文件，定义了导师的审查 Checklist 和执行流程
 ├── references/          # 核心知识库 (Agent 在评估计划前必须读取)
+│   ├── chip_distribution_analysis.md      # 筹码分布与主力行为识别
 │   ├── japanese_candlestick_techniques.md  # K 线反转形态与趋势法则
 │   ├── livermore_wisdom.md                 # 杰西·利弗莫尔的大局观与纪律
 │   ├── practical_a_share_trading.md        # A股实战原则 (均线、量价、T+1风控)
+│   ├── ruler_rule_trend_channel.md         # 直尺法则与趋势通道
 │   └── wisdom_of_trading_rules.md          # 基础生存法则 (止损、资金管理)
 ├── scripts/             # 自动化工具脚本
 │   └── analyze_trend.py # 获取近期股价、均线及短期趋势的 Python 脚本
