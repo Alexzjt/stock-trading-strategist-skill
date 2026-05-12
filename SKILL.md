@@ -1,6 +1,6 @@
 ---
 name: stock-trading-strategist
-description: "Use this skill whenever the user wants to review, evaluate, or validate their stock trading plans, including opening (buying) or closing (selling) positions. Triggers include any mention of 'trading plan', 'review my trade', 'should I buy', 'should I sell', 'trading strategy', or discussions about stop-loss, money management, and trading psychology."
+description: "Strict stock trading plan review and risk control mentor. Use this skill whenever the user wants to review, evaluate, or validate their stock trading plans, including opening (buying) or closing (selling) positions. Triggers on any mention of trading plans, should I buy/sell, stop-loss, money management, trading psychology, or A-share strategy — even if the user just names a stock code (e.g. 600519) and asks for an opinion. Also trigger on Chinese phrases such as '交易计划', '要不要买', '该不该卖', '止损', '加仓', '补仓', '仓位管理', '复盘', '看看这只股票', or '帮我分析'. When in doubt, trigger — it is better to review a plan that didn't need it than to let a bad trade go unchecked."
 license: MIT
 ---
 
