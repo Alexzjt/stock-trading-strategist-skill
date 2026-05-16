@@ -26,7 +26,10 @@ license: MIT
 
 | 参考文件 (Reference) | 触发条件 (When to Read) | 核心知识点 (Core Concepts) |
 | :--- | :--- | :--- |
-| `wisdom_of_trading_rules.md` | **必定读取 (Mandatory)** | 风控铁律、资金管理、顺势而为、绝对止损 |
+| `wisdom/01_core_principles.md` | **必定读取 (Mandatory)** · 每次对话必须首先加载 | 止损铁律、资金管理、顺势而为、华尔街家训、成功者共性 |
+| `wisdom/02_technical_rules.md` | 用户询问买卖时机、临界点、支撑阻力、量价关系、止损点位置、大市顶部信号 | 正常运动判定、三种入场法、分层建仓、移动止损、选股漏斗 |
+| `wisdom/03_psychology.md` | 用户出现情绪化信号：不肯止损、要赚回来、跌了很多很便宜、大家都说好、睡不着、补仓解套 | 人性六弱点、恐惧/贪婪/希望三障碍、心理审查触发规则 |
+| `wisdom/04_masters_and_bubbles.md` | 询问大师经验，或用户追逐热门概念股/AI/新能源等疯狂题材 | 利物莫7语录、巴鲁克10条、索罗斯反馈理论、泡沫全过程与操作策略 |
 | `japanese_candlestick_techniques.md` | 询问 K线形态、反转信号、买卖精确微观时机 | 乌云盖顶、黄昏星、十字星、单双多K线反转 |
 | `stock_trading_practice_tw.md` | 询问 均线突破、成交量、颈线、缺口理论 | 葛南维八大法则、量价配合、M头/W底、缺口 |
 | `chip_distribution_analysis.md` | 询问 主力动向、筹码分布、吸筹/派发 | 筹码单峰密集、主力洗盘与出货判定 |
