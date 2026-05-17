@@ -278,6 +278,110 @@ def assess_volume_price(row_dict, vol_info):
 
 
 # ──────────────────────────────────────────────
+# Macro Chart Pattern Detection (Magee)
+# ──────────────────────────────────────────────
+
+def find_local_extrema(df, start_idx, end_idx, window=21):
+    """
+    Find local peaks and valleys within [start_idx, end_idx].
+    window=21 (approx 1 month) means +/- 10 days.
+    Returns lists of (index, price, volume) for peaks and valleys.
+    """
+    peaks = []
+    valleys = []
+    
+    # We only look at data up to end_idx to avoid lookahead bias relative to target_date
+    sub_df = df.iloc[max(0, start_idx):end_idx+1].copy()
+    if len(sub_df) < window:
+        return peaks, valleys
+        
+    half_w = window // 2
+    
+    for i in range(half_w, len(sub_df) - half_w):
+        idx_in_orig = sub_df.index[i]
+        
+        # Check peak
+        window_highs = sub_df['最高'].iloc[i-half_w : i+half_w+1]
+        if sub_df['最高'].iloc[i] == window_highs.max():
+            # Avoid consecutive same-price peaks too close to each other
+            if not peaks or (idx_in_orig - peaks[-1][0] > half_w):
+                peaks.append((idx_in_orig, float(sub_df['最高'].iloc[i]), float(sub_df['成交量'].iloc[i])))
+                
+        # Check valley
+        window_lows = sub_df['最低'].iloc[i-half_w : i+half_w+1]
+        if sub_df['最低'].iloc[i] == window_lows.min():
+            if not valleys or (idx_in_orig - valleys[-1][0] > half_w):
+                valleys.append((idx_in_orig, float(sub_df['最低'].iloc[i]), float(sub_df['成交量'].iloc[i])))
+                
+    return peaks, valleys
+
+def detect_macro_patterns(df, target_idx):
+    """
+    Detect classic macro patterns ending near target_idx.
+    Looks back ~150 days.
+    """
+    patterns = []
+    if target_idx < 40: # Need at least ~2 months of data
+        return patterns
+        
+    start_idx = max(0, target_idx - 150)
+    peaks, valleys = find_local_extrema(df, start_idx, target_idx, window=21)
+    
+    current_close = float(df.iloc[target_idx]['收盘'])
+    
+    # Check Double Top (M头)
+    if len(peaks) >= 2 and len(valleys) >= 1:
+        p1, p2 = peaks[-2], peaks[-1]
+        # Find valley between p1 and p2
+        v_between = [v for v in valleys if p1[0] < v[0] < p2[0]]
+        
+        if v_between:
+            v_neck = min(v_between, key=lambda x: x[1]) # lowest point between peaks
+            
+            time_diff = p2[0] - p1[0]
+            price_diff_pct = abs(p1[1] - p2[1]) / p1[1]
+            depth_pct = (p1[1] - v_neck[1]) / p1[1]
+            
+            if time_diff >= 20 and price_diff_pct <= 0.03 and depth_pct >= 0.05:
+                # Volume check: Right peak volume should ideally be smaller
+                vol_status = "右峰缩量(标准)" if p2[2] < p1[2] else "右峰未缩量(警惕)"
+                
+                # Trigger check: dropped below neckline by 3%?
+                if current_close < v_neck[1] * 0.97:
+                    patterns.append(f"双重顶 (M头) 破位 - 历时{time_diff}天, 颈线{v_neck[1]:.2f}已跌破3%, {vol_status}。强烈看跌反转！")
+                elif current_close < v_neck[1] * 1.03:
+                    patterns.append(f"双重顶 (M头) 雏形 - 历时{time_diff}天, 正在试探颈线{v_neck[1]:.2f}, {vol_status}。")
+
+    # Check Head and Shoulders Top (头肩顶)
+    if len(peaks) >= 3 and len(valleys) >= 2:
+        pL, pH, pR = peaks[-3], peaks[-2], peaks[-1]
+        
+        # pH must be highest
+        if pH[1] > pL[1] and pH[1] > pR[1]:
+            # Shoulders roughly same height
+            if abs(pL[1] - pR[1]) / pL[1] <= 0.05:
+                v1_cands = [v for v in valleys if pL[0] < v[0] < pH[0]]
+                v2_cands = [v for v in valleys if pH[0] < v[0] < pR[0]]
+                
+                if v1_cands and v2_cands:
+                    v1 = min(v1_cands, key=lambda x: x[1])
+                    v2 = min(v2_cands, key=lambda x: x[1])
+                    
+                    slope = (v2[1] - v1[1]) / (v2[0] - v1[0]) if v2[0] != v1[0] else 0
+                    neckline_at_target = v2[1] + slope * (target_idx - v2[0])
+                    
+                    time_span = pR[0] - pL[0]
+                    vol_status = "右肩缩量(标准)" if pR[2] < pH[2] else "右肩未缩量"
+                    
+                    if current_close < neckline_at_target * 0.97:
+                        patterns.append(f"头肩顶 破位 - 历时{time_span}天, 颈线{neckline_at_target:.2f}已跌破3%, {vol_status}。长线看跌反转！")
+                    elif current_close < neckline_at_target * 1.03:
+                        patterns.append(f"头肩顶 雏形 - 历时{time_span}天, 逼近颈线{neckline_at_target:.2f}, {vol_status}。")
+                        
+    return patterns
+
+
+# ──────────────────────────────────────────────
 # Main Analysis (supports --date)
 # ──────────────────────────────────────────────
 
@@ -379,8 +483,11 @@ def analyze_at_date(symbol_str, target_date=None, context_days=5):
     vol_info = analyze_volume(df, target_idx)
     vol_price = assess_volume_price(target_dict, vol_info)
 
-    # K-line patterns at target date
-    patterns = detect_patterns_at(df, target_idx)
+    # K-line micro patterns at target date
+    micro_patterns = detect_patterns_at(df, target_idx)
+    
+    # Macro patterns at target date
+    macro_patterns = detect_macro_patterns(df, target_idx)
 
     # Trend assessment at that date
     ma10_val = float(target_row['MA10']) if pd.notna(target_row['MA10']) else None
@@ -421,7 +528,8 @@ def analyze_at_date(symbol_str, target_date=None, context_days=5):
         },
         "volume_analysis": vol_info,
         "volume_price_relationship": vol_price,
-        "candlestick_patterns": patterns,
+        "candlestick_patterns": micro_patterns,
+        "macro_patterns": macro_patterns,
         "context_klines": context_klines,
     }
 
