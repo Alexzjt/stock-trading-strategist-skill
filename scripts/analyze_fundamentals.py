@@ -96,13 +96,13 @@ def analyze_fundamentals(symbol):
         warnings.append({
             "risk": "高商誉悬顶",
             "level": "❌ 极高风险",
-            "desc": f"商誉占总资产比例高达 {goodwill_ratio:.1%} (商誉: {goodwill/1e8:.2f}亿 / 总资产: {total_assets/1e8:.2f}亿)。一旦遇到经济逆风或并购标的业绩不达标，极易发生巨额资产减值，直接导致巨额亏损甚至 ST。"
+            "desc": f"商誉占总资产比例高达 {goodwill_ratio:.1%}。一旦遇到经济逆风或并购标的业绩不达标，极易发生巨额资产减值。注：若为科技股/信创板块，常因轻资产并购导致商誉偏高，但仍需极度警惕减值风险。"
         })
     elif goodwill_ratio > 0.10:
         warnings.append({
             "risk": "商誉偏高",
             "level": "🟡 中度风险",
-            "desc": f"商誉占比为 {goodwill_ratio:.1%}，需关注往期并购标的的业绩对赌完成情况。"
+            "desc": f"商誉占比为 {goodwill_ratio:.1%}。科技类公司并购易产生商誉，需密切关注往期并购标的的业绩对赌完成情况。"
         })
         
     # 2. “大存大贷”财务造假排查 (Cash & Debt Paradox)
@@ -122,22 +122,33 @@ def analyze_fundamentals(symbol):
             warnings.append({
                 "risk": "净利润无现金支撑",
                 "level": "❌ 极高风险",
-                "desc": f"账面净利润高达 {net_profit/1e8:.2f}亿，但经营活动现金流居然是负数({operating_cf/1e8:.2f}亿)。典型的纸上富贵，可能在通过应收账款刷利润，有暴雷风险。"
+                "desc": f"账面净利润高达 {net_profit/1e8:.2f}亿，但经营现金流为负({operating_cf/1e8:.2f}亿)。除非是研发投入极大或To-G长周期的科技/信创企业，否则极可能是纸上富贵或通过应收账款刷利润，有暴雷风险。"
             })
         elif cf_to_profit_ratio < 0.5:
             warnings.append({
                 "risk": "盈利质量低下",
                 "level": "🟡 中度风险",
-                "desc": f"净利润现金含量仅为 {cf_to_profit_ratio:.1%}，公司赚到的很多利润并没有转换成真金白银入账。"
+                "desc": f"净利润现金含量仅为 {cf_to_profit_ratio:.1%}。科技类企业若处在研发扩张或项目实施期可能导致此现象，但传统行业若出现此数据需高度警惕。"
             })
 
     # 4. 应收账款坏账风险 (Receivable Risk)
+    # 对于2B制造业或新能源产业链（如宁德时代），因行业话语权和结算周期（如票据结算）
+    # 对于信创/科技股（如易华录等To-G业务），回款周期通常极长
+    # 【血泪教训】：千万不要被“科技叙事”完全洗脑，易华录已经因巨额亏损被ST。
+    # 行业的“长期坏账习惯”最终依然会体现为财务暴雷。所以即使放宽阈值，也必须严加防范！
+    # 应收账款比例通常偏高。因此将极高风险阈值上调，并增加行业特性提示。
     receivable_to_revenue = (accounts_receivable / revenue) if revenue > 0 else 0
-    if receivable_to_revenue > 0.40:
+    if receivable_to_revenue > 0.60:
         warnings.append({
-            "risk": "应收账款过高",
+            "risk": "应收账款极高",
             "level": "❌ 高风险",
-            "desc": f"应收账款({accounts_receivable/1e8:.2f}亿)占营业收入({revenue/1e8:.2f}亿)比例高达 {receivable_to_revenue:.1%}。可能存在大量的压货或提前确认收入，一旦发生坏账计提，将严重侵蚀利润。"
+            "desc": f"应收账款({accounts_receivable/1e8:.2f}亿)占营业收入({revenue/1e8:.2f}亿)比例高达 {receivable_to_revenue:.1%}。除非所处行业（如新能源、To-G科技信创、2B制造业）普遍存在长账期和票据结算惯例，否则可能存在压货嫌疑，需警惕坏账计提风险。"
+        })
+    elif receivable_to_revenue > 0.40:
+        warnings.append({
+            "risk": "应收账款偏高",
+            "level": "🟡 中度风险",
+            "desc": f"应收账款占比为 {receivable_to_revenue:.1%}。需结合行业特性判断是否合理，注意甄别坏账计提风险。"
         })
 
     result = {
@@ -154,7 +165,7 @@ def analyze_fundamentals(symbol):
             "Receivables_应收账款_亿": round(accounts_receivable / 1e8, 2)
         },
         "warnings": warnings,
-        "verdict": "健康" if not warnings else "高危 (请参阅警告)" if any("红" in w['level'] or "高风险" in w['level'] for w in warnings) else "需谨慎关注"
+        "verdict": "💰 无致命雷区 (可专注技术面交易)" if not warnings else "❌ 致命雷区 (极高暴雷/退市风险，建议一票否决)" if any("极高风险" in w['level'] for w in warnings) else "🟡 存在瑕疵 (A股常态，需结合技术面严格止损)"
     }
     return result
 
