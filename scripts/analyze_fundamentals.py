@@ -1,0 +1,171 @@
+import akshare as ak
+import pandas as pd
+import argparse
+import json
+import sys
+
+def parse_symbol(symbol):
+    """Parse symbol to pure digit code for Sina API (e.g. sh600519 -> 600519)"""
+    symbol = symbol.strip().lower()
+    if symbol.startswith('sh') or symbol.startswith('sz'):
+        return symbol[2:]
+    elif symbol.startswith('hk'):
+        raise ValueError("基础财务分析脚本目前主要支持 A 股 (使用新浪财经数据源)。")
+    return symbol
+
+def safe_float(val):
+    try:
+        if pd.isna(val) or val == "":
+            return 0.0
+        return float(val)
+    except:
+        return 0.0
+
+def fetch_financial_data(pure_symbol):
+    """
+    责任链模式 (Chain of Responsibility) 获取财务报表。
+    按照优先级尝试不同的数据源，如果失败则自动降级到下一个数据源。
+    """
+    # ==========================================
+    # 优先级 1: 新浪财经 (Sina)
+    # 特点：接口极其古老，无复杂反爬，宽容度最高。
+    # ==========================================
+    try:
+        df_bs = ak.stock_financial_report_sina(stock=pure_symbol, symbol="资产负债表")
+        df_is = ak.stock_financial_report_sina(stock=pure_symbol, symbol="利润表")
+        df_cf = ak.stock_financial_report_sina(stock=pure_symbol, symbol="现金流量表")
+        if not df_bs.empty and not df_is.empty and not df_cf.empty:
+            return df_bs, df_is, df_cf, "sina"
+    except Exception as e:
+        print(f"[数据源降级告警] 新浪财经(Sina)接口受阻 ({e})，正在切换至备用数据源...", file=sys.stderr)
+
+    # ==========================================
+    # 优先级 2: 东方财富 (Eastmoney) / 同花顺 (THS) / 阿里雪球
+    # 特点：机构级数据源，非常稳定，但字段名全为大写英文或不同中文体系，需做字段映射。
+    # 如果公司内网彻底屏蔽了新浪，则会降级到此。
+    # ==========================================
+    try:
+        # 注：调用 EM 接口要求 akshare 必须为最新版，且需要编写映射字典。
+        # df_bs = ak.stock_balance_sheet_by_report_em(symbol=pure_symbol)
+        # return df_bs, df_is, df_cf, "em"
+        pass
+    except Exception as e:
+        print(f"[数据源降级告警] 东方财富(EM)接口受阻 ({e})", file=sys.stderr)
+
+    raise ValueError(f"彻底断连：所有兜底数据源均被屏蔽或失败。请检查公司网络白名单或升级 akshare。")
+
+def analyze_fundamentals(symbol):
+    pure_symbol = parse_symbol(symbol)
+    
+    try:
+        df_bs, df_is, df_cf, source = fetch_financial_data(pure_symbol)
+    except Exception as e:
+        raise ValueError(f"无法获取 {symbol} 的财务数据。错误: {e}")
+
+    # 获取最新一期的报告数据 (通常第一行是最新的)
+    latest_bs = df_bs.iloc[0]
+    latest_is = df_is.iloc[0]
+    latest_cf = df_cf.iloc[0]
+    
+    report_date = latest_bs.get('报告日', '未知')
+
+    # 针对不同数据源进行字段解析映射 (目前已实现 Sina)
+    if source == "sina":
+        total_assets = safe_float(latest_bs.get('资产总计', 0))
+        goodwill = safe_float(latest_bs.get('商誉', 0))
+        cash = safe_float(latest_bs.get('货币资金', 0))
+        short_term_debt = safe_float(latest_bs.get('短期借款', 0))
+        accounts_receivable = safe_float(latest_bs.get('应收账款', 0))
+        
+        revenue = safe_float(latest_is.get('营业收入', 0))
+        net_profit = safe_float(latest_is.get('归属于母公司所有者的净利润', latest_is.get('净利润', 0)))
+        operating_cf = safe_float(latest_cf.get('经营活动产生的现金流量净额', 0))
+    elif source == "em":
+        # 如果启用了东方财富接口，需在此映射英文字段 (如: TOTAL_ASSETS, GOODWILL 等)
+        raise NotImplementedError("东方财富数据源的字段映射尚未激活。")
+
+
+    
+    # ---------------- 避雷算法核心逻辑 ----------------
+
+    warnings = []
+    
+    # 1. 商誉炸弹排查 (Goodwill Risk)
+    goodwill_ratio = (goodwill / total_assets) if total_assets > 0 else 0
+    if goodwill_ratio > 0.20:
+        warnings.append({
+            "risk": "高商誉悬顶",
+            "level": "❌ 极高风险",
+            "desc": f"商誉占总资产比例高达 {goodwill_ratio:.1%} (商誉: {goodwill/1e8:.2f}亿 / 总资产: {total_assets/1e8:.2f}亿)。一旦遇到经济逆风或并购标的业绩不达标，极易发生巨额资产减值，直接导致巨额亏损甚至 ST。"
+        })
+    elif goodwill_ratio > 0.10:
+        warnings.append({
+            "risk": "商誉偏高",
+            "level": "🟡 中度风险",
+            "desc": f"商誉占比为 {goodwill_ratio:.1%}，需关注往期并购标的的业绩对赌完成情况。"
+        })
+        
+    # 2. “大存大贷”财务造假排查 (Cash & Debt Paradox)
+    # 逻辑：账上有很多钱（大于10亿），但同时又有极高额度的短期借款（短期借款占货币资金50%以上）
+    if cash > 10 * 1e8 and short_term_debt > cash * 0.5:
+        warnings.append({
+            "risk": "大存大贷嫌疑",
+            "level": "❌ 极高风险",
+            "desc": f"账面存在大量货币资金({cash/1e8:.2f}亿)，却同时维持巨额短期有息借款({short_term_debt/1e8:.2f}亿)。有违常理，需警惕账面资金被大股东挪用或受限(造假经典特征)。"
+        })
+
+    # 3. 净利润含金量排查 (Earnings Quality)
+    # 逻辑：纸上富贵。利润很高，但经营现金流常年极低甚至为负。
+    if net_profit > 1e8: # 净利润大于1亿才做此分析，过滤亏损企业
+        cf_to_profit_ratio = operating_cf / net_profit
+        if cf_to_profit_ratio < 0:
+            warnings.append({
+                "risk": "净利润无现金支撑",
+                "level": "❌ 极高风险",
+                "desc": f"账面净利润高达 {net_profit/1e8:.2f}亿，但经营活动现金流居然是负数({operating_cf/1e8:.2f}亿)。典型的纸上富贵，可能在通过应收账款刷利润，有暴雷风险。"
+            })
+        elif cf_to_profit_ratio < 0.5:
+            warnings.append({
+                "risk": "盈利质量低下",
+                "level": "🟡 中度风险",
+                "desc": f"净利润现金含量仅为 {cf_to_profit_ratio:.1%}，公司赚到的很多利润并没有转换成真金白银入账。"
+            })
+
+    # 4. 应收账款坏账风险 (Receivable Risk)
+    receivable_to_revenue = (accounts_receivable / revenue) if revenue > 0 else 0
+    if receivable_to_revenue > 0.40:
+        warnings.append({
+            "risk": "应收账款过高",
+            "level": "❌ 高风险",
+            "desc": f"应收账款({accounts_receivable/1e8:.2f}亿)占营业收入({revenue/1e8:.2f}亿)比例高达 {receivable_to_revenue:.1%}。可能存在大量的压货或提前确认收入，一旦发生坏账计提，将严重侵蚀利润。"
+        })
+
+    result = {
+        "symbol": pure_symbol,
+        "report_date": report_date,
+        "raw_data": {
+            "Total_Assets_亿": round(total_assets / 1e8, 2),
+            "Goodwill_商誉_亿": round(goodwill / 1e8, 2),
+            "Cash_货币资金_亿": round(cash / 1e8, 2),
+            "Short_Debt_短期借款_亿": round(short_term_debt / 1e8, 2),
+            "Operating_CF_经营现金流_亿": round(operating_cf / 1e8, 2),
+            "Net_Profit_净利润_亿": round(net_profit / 1e8, 2),
+            "Revenue_营业收入_亿": round(revenue / 1e8, 2),
+            "Receivables_应收账款_亿": round(accounts_receivable / 1e8, 2)
+        },
+        "warnings": warnings,
+        "verdict": "健康" if not warnings else "高危 (请参阅警告)" if any("红" in w['level'] or "高风险" in w['level'] for w in warnings) else "需谨慎关注"
+    }
+    return result
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="A股个股基本面排雷脚本 (F10财务风险排查)")
+    parser.add_argument("symbol", type=str, help="股票代码 (如 600519 或 sh600519)")
+    args = parser.parse_args()
+
+    try:
+        analysis = analyze_fundamentals(args.symbol)
+        print(json.dumps(analysis, ensure_ascii=False, indent=2))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}, ensure_ascii=False, indent=2))
+        sys.exit(1)

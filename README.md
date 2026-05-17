@@ -35,7 +35,9 @@
 │       ├── 03_psychology.md                # 交易心理障碍与心理训练（含斯蒂恩博格进阶工具）
 │       └── 04_masters_and_bubbles.md       # 大师智慧精髓与泡沫应对
 ├── scripts/             # 自动化工具脚本
-│   └── analyze_trend.py # Python 量化雷达脚本 (获取近期股价、均线、微观 K 线组合及宏观大势形态判定)
+│   ├── analyze_trend.py # Python 量化雷达脚本 (获取近期股价、均线、微观 K 线组合及宏观大势形态判定)
+│   ├── analyze_fundamentals.py # [NEW] 基础财务排雷脚本 (扫描高商誉、大存大贷、应收账款坏账等雷区)
+│   └── batch_review.py  # [NEW] 批量自选股策略诊断脚手架
 └── README.md            # 项目说明文档
 ```
 
