@@ -56,8 +56,10 @@ def analyze_volume(df, idx):
 
     # Assessment
     assessment = "正常"
-    if vol_ratio_5 and vol_ratio_5 >= 2.0:
-        assessment = "显著放量 (>=2x)"
+    if vol_ratio_5 and vol_ratio_5 >= 3.0:
+        assessment = "天量/巨量 (>=3x, 警惕抛售高峰/单日反转)"
+    elif vol_ratio_5 and vol_ratio_5 >= 2.0:
+        assessment = "显著放量 (>=2x, 符合突破验证)"
     elif vol_ratio_5 and vol_ratio_5 >= 1.5:
         assessment = "温和放量 (1.5x)"
     elif vol_ratio_5 and vol_ratio_5 <= 0.5:
@@ -251,17 +253,22 @@ def assess_volume_price(row_dict, vol_info):
 
     price_up = row_dict["change_pct"] is not None and row_dict["change_pct"] > 0
     price_down = row_dict["change_pct"] is not None and row_dict["change_pct"] < 0
-    vol_surge = vol_info["vol_ratio_vs_5d"] >= 1.5
+    vol_climax = vol_info["vol_ratio_vs_5d"] >= 3.0
+    vol_surge = vol_info["vol_ratio_vs_5d"] >= 1.5 and not vol_climax
     vol_shrink = vol_info["vol_ratio_vs_5d"] <= 0.7
 
-    if price_up and vol_surge:
-        return "量价齐升 — 上涨有量支撑，健康"
+    if price_up and vol_climax:
+        return "天量滞涨/巨量冲高 — 极度危险，警惕主力派发与抛售高峰（单日反转）"
+    elif price_down and vol_climax:
+        return "恐慌性天量抛售 — 杀跌动能极强（清仓日），但也可能孕育V型反转"
+    elif price_up and vol_surge:
+        return "量价齐升 — 上涨有放量支撑，突破健康"
     elif price_up and vol_shrink:
-        return "价升量缩 — 上涨缺乏量能，警惕虚涨"
+        return "价升量缩 — 上涨缺乏量能，警惕诱多/假突破"
     elif price_down and vol_surge:
         return "放量下跌 — 空方力量强烈，危险信号"
     elif price_down and vol_shrink:
-        return "缩量下跌 — 卖压减弱，可能接近支撑"
+        return "缩量下跌 — (警告:向下破位无需放量，无量下跌不代表支撑有效)"
     elif price_up:
         return "温和上涨 — 量能平稳"
     elif price_down:
