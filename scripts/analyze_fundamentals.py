@@ -54,6 +54,30 @@ def fetch_financial_data(pure_symbol):
 
     raise ValueError(f"彻底断连：所有兜底数据源均被屏蔽或失败。请检查公司网络白名单或升级 akshare。")
 
+def fetch_top_shareholders(pure_symbol):
+    """
+    获取前十大股东（包含责任链兜底）
+    """
+    prefix = 'sh' if pure_symbol.startswith('6') else 'sz' if pure_symbol.startswith(('0', '3')) else 'bj'
+    full_symbol = prefix + pure_symbol
+    try:
+        # 优先级1：十大股东
+        df = ak.stock_gdfx_top_10_em(symbol=full_symbol)
+        if not df.empty:
+            return df['股东名称'].tolist()
+    except Exception as e:
+        print(f"[股东数据降级] 十大股东接口失败 ({e})，尝试流通股东...", file=sys.stderr)
+        
+    try:
+        # 优先级2：十大流通股东
+        df = ak.stock_gdfx_free_top_10_em(symbol=full_symbol)
+        if not df.empty:
+            return df['股东名称'].tolist()
+    except Exception as e:
+        print(f"[股东数据降级] 流通股东接口也失败 ({e})，跳过股东分析", file=sys.stderr)
+    
+    return []
+
 def analyze_fundamentals(symbol):
     pure_symbol = parse_symbol(symbol)
     
@@ -89,6 +113,27 @@ def analyze_fundamentals(symbol):
     # ---------------- 避雷算法核心逻辑 ----------------
 
     warnings = []
+    
+    # 0. 国家队/国资/险资护航检测 (National Team Buff)
+    state_owned_background = False
+    national_team_keywords = [
+        "社保基金", "中央汇金", "中国证券金融", "国资委", "投资控股", 
+        "国家大基金", "国有资产", "基本养老保险", "人寿保险", "财产保险", 
+        "人保", "太保", "平安", "新华人寿", "大家人寿", "泰康人寿"
+    ]
+    
+    shareholders = fetch_top_shareholders(pure_symbol)
+    for sh in shareholders:
+        if any(kw in str(sh) for kw in national_team_keywords):
+            state_owned_background = True
+            break
+            
+    if state_owned_background:
+        warnings.append({
+            "risk": "国家队/国资/险资护航",
+            "level": "🛡️ 资金底盘稳固",
+            "desc": "前十大股东中出现国家队、国资委或大型险资。虽然这能极大降低退市和直接造假的风险，但【警告】：国家队持股不能免疫股价的系统性大幅下跌。绝不可将其当做免死金牌，破位仍需严格止损！"
+        })
     
     # 1. 商誉炸弹排查 (Goodwill Risk)
     goodwill_ratio = (goodwill / total_assets) if total_assets > 0 else 0
@@ -164,9 +209,20 @@ def analyze_fundamentals(symbol):
             "Revenue_营业收入_亿": round(revenue / 1e8, 2),
             "Receivables_应收账款_亿": round(accounts_receivable / 1e8, 2)
         },
+        "state_owned_background": state_owned_background,
         "warnings": warnings,
-        "verdict": "💰 无致命雷区 (可专注技术面交易)" if not warnings else "❌ 致命雷区 (极高暴雷/退市风险，建议一票否决)" if any("极高风险" in w['level'] for w in warnings) else "🟡 存在瑕疵 (A股常态，需结合技术面严格止损)"
     }
+    
+    has_fatal = any("极高风险" in w['level'] for w in warnings)
+    has_warning = any("中度风险" in w['level'] or "高风险" in w['level'] for w in warnings)
+    
+    if has_fatal:
+        result["verdict"] = "❌ 致命雷区 (极高暴雷/退市风险，建议一票否决)"
+    elif has_warning:
+        result["verdict"] = "🟡 存在瑕疵 (A股常态，需结合技术面严格止损)"
+    else:
+        result["verdict"] = "💰 无致命雷区 (可专注技术面交易)"
+        
     return result
 
 if __name__ == "__main__":

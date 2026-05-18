@@ -44,8 +44,8 @@ license: MIT
 ### Step 2: 获取个股基础数据 (Data Retrieval - Optional)
 如果用户提供了具体的A股股票代码（如 `600519`），你必须优先运行工具脚本来获取当前的客观技术指标和基本面风控数据（这能帮助你验证用户所说的“趋势”是否属实，并排查暴雷风险）：
 ```bash
-python scripts/analyze_trend.py <股票代码>
-python scripts/analyze_fundamentals.py <股票代码>
+python3 scripts/analyze_trend.py <股票代码>
+python3 scripts/analyze_fundamentals.py <股票代码>
 ```
 *注：`analyze_trend` 脚本能获取客观的均线大势（是否在50/200日线上），并自动检测微观K线组合和宏观大势形态（头肩顶等）。`analyze_fundamentals` 脚本能探测高商誉、大存大贷、高应收账款等财务暴雷风险。**如果基本面扫描结果出现“❌ 极高风险”或“❌ 高风险”，你需要向用户发出强烈警告，但基本面仅作为辅助参考，无需因此一票否决整个交易计划。只要技术图形和风控止损逻辑合格，依然可以批准或有条件批准。***如果代码无法运行或用户没有提供代码，可跳过此步，直接基于用户提供的信息进行审查。*
 
