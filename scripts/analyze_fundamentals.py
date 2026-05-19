@@ -5,13 +5,20 @@ import json
 import sys
 
 def parse_symbol(symbol):
-    """Parse symbol to pure digit code for Sina API (e.g. sh600519 -> 600519)"""
+    """Parse symbol to pure digit code for API (e.g. sh600519 -> 600519, hk02513 -> 02513)"""
     symbol = symbol.strip().lower()
-    if symbol.startswith('sh') or symbol.startswith('sz'):
+    if symbol.startswith(('sh', 'sz', 'bj')):
         return symbol[2:]
     elif symbol.startswith('hk'):
-        raise ValueError("基础财务分析脚本目前主要支持 A 股 (使用新浪财经数据源)。")
+        return symbol[2:].zfill(5)  # HK stocks: pad to 5 digits
+    elif symbol.startswith('us'):
+        raise ValueError("美股财务分析暂不支持。")
     return symbol
+
+def is_hk_stock(symbol):
+    """Check if the symbol is a Hong Kong stock"""
+    symbol = symbol.strip().lower()
+    return symbol.startswith('hk')
 
 def safe_float(val):
     try:
@@ -20,6 +27,183 @@ def safe_float(val):
         return float(val)
     except:
         return 0.0
+
+def fetch_hk_financial_data(pure_symbol):
+    """
+    获取港股财务指标数据 (东方财富数据源)。
+    返回: (indicator_df, report_df) — indicator_df 为最新财务指标，report_df 为历史报告数据
+    """
+    try:
+        # 获取港股财务分析指标（包含多个报告期）
+        df = ak.stock_financial_hk_analysis_indicator_em(symbol=pure_symbol)
+        if df.empty:
+            raise ValueError("港股财务数据为空")
+        return df
+    except Exception as e:
+        raise ValueError(f"无法获取港股 {pure_symbol} 的财务数据: {e}")
+
+
+def analyze_hk_fundamentals(pure_symbol, original_symbol):
+    """港股特有的基本面分析"""
+    df = fetch_hk_financial_data(pure_symbol)
+    
+    # 取最新一期报告
+    latest = df.iloc[0]
+    report_date = str(latest.get('REPORT_DATE', '未知'))[:10]
+    
+    # 字段映射 (东方财富港股财务指标英文字段)
+    revenue = safe_float(latest.get('OPERATE_INCOME', 0))           # 营业收入
+    net_profit = safe_float(latest.get('HOLDER_PROFIT', 0))         # 归母净利润
+    per_netcash_operate = safe_float(latest.get('PER_NETCASH_OPERATE', 0))  # 每股经营现金流
+    bps = safe_float(latest.get('BPS', 0))                          # 每股净资产
+    basic_eps = safe_float(latest.get('BASIC_EPS', 0))              # 每股收益
+    gross_profit_ratio = safe_float(latest.get('GROSS_PROFIT_RATIO', 0))    # 毛利率(%)
+    net_profit_ratio = safe_float(latest.get('NET_PROFIT_RATIO', 0))        # 净利率(%)
+    roe = safe_float(latest.get('ROE_AVG', 0))                      # ROE(%)
+    roa = safe_float(latest.get('ROA', 0))                          # ROA(%)
+    debt_asset_ratio = safe_float(latest.get('DEBT_ASSET_RATIO', 0))        # 资产负债率(%)
+    current_ratio = safe_float(latest.get('CURRENT_RATIO', 0))      # 流动比率(%)
+    revenue_yoy = safe_float(latest.get('OPERATE_INCOME_YOY', 0))   # 营收同比(%)
+    profit_yoy = safe_float(latest.get('HOLDER_PROFIT_YOY', 0))     # 利润同比(%)
+    ocf_sales = safe_float(latest.get('OCF_SALES', 0))              # 经营现金流/营收
+    
+    # 估算总经营现金流 (每股经营现金流 × 总股本)
+    # 从 stock_hk_financial_indicator_em 获取总市值和已发行股本
+    try:
+        indicator_df = ak.stock_hk_financial_indicator_em(symbol=pure_symbol)
+        total_shares = safe_float(indicator_df.iloc[0].get('已发行股本(股)', 0))
+        operating_cf = (per_netcash_operate / 100) * total_shares  # 分转元
+        total_market_cap = safe_float(indicator_df.iloc[0].get('总市值(港元)', 0))
+    except:
+        operating_cf = 0
+        total_shares = 0
+        total_market_cap = 0
+    
+    warnings = []
+    
+    # --- 港股特有分析 ---
+    
+    # 0. 亏损检测
+    if net_profit < 0:
+        loss_ratio = abs(net_profit) / abs(revenue) if revenue != 0 else 0
+        if loss_ratio > 1.0:
+            warnings.append({
+                "risk": "巨额亏损",
+                "level": "❌ 极高风险",
+                "desc": f"净利润 {net_profit/1e8:.2f}亿，亏损额已超过营收({revenue/1e8:.2f}亿)的{loss_ratio:.0%}。公司处于严重烧钱状态，需确认是否有持续融资能力。"
+            })
+        else:
+            warnings.append({
+                "risk": "持续亏损",
+                "level": "❌ 高风险",
+                "desc": f"净利润 {net_profit/1e8:.2f}亿，亏损。营收 {revenue/1e8:.2f}亿，净利率 {net_profit_ratio:.1f}%。"
+            })
+    
+    # 1. 负净资产检测
+    if bps < 0:
+        warnings.append({
+            "risk": "资不抵债",
+            "level": "❌ 极高风险",
+            "desc": f"每股净资产为 {bps:.2f}，已陷入资不抵债状态。除非是AI/科技等轻资产高估值公司且有大额融资支持，否则极为危险。"
+        })
+    
+    # 2. 经营现金流检测
+    if net_profit != 0 and operating_cf != 0:
+        cf_to_profit = operating_cf / net_profit if net_profit < 0 else operating_cf / abs(net_profit)
+        # 对亏损企业，检查经营现金流是否也在恶化
+        if net_profit < 0 and operating_cf < 0:
+            warnings.append({
+                "risk": "烧钱加速",
+                "level": "❌ 高风险",
+                "desc": f"净利润亏损且经营现金流也为负({operating_cf/1e8:.2f}亿)。公司不仅账面亏损，实际经营也在持续流血。"
+            })
+    elif net_profit > 0 and ocf_sales < 0:
+        warnings.append({
+            "risk": "利润含金量低",
+            "level": "🟡 中度风险",
+            "desc": f"虽有净利润 {net_profit/1e8:.2f}亿，但经营现金流/营收为 {ocf_sales:.1%}，现金回收能力弱。"
+        })
+    
+    # 3. 高负债检测
+    if debt_asset_ratio > 150:
+        warnings.append({
+            "risk": "超高杠杆",
+            "level": "❌ 极高风险",
+            "desc": f"资产负债率高达 {debt_asset_ratio:.1f}%（>150%即资不抵债）。"
+        })
+    elif debt_asset_ratio > 80:
+        warnings.append({
+            "risk": "高负债运营",
+            "level": "🟡 中度风险",
+            "desc": f"资产负债率 {debt_asset_ratio:.1f}%，杠杆偏高。需关注偿债能力和再融资风险。"
+        })
+    
+    # 4. 营收下滑检测
+    if revenue_yoy < -20:
+        warnings.append({
+            "risk": "营收大幅下滑",
+            "level": "❌ 高风险",
+            "desc": f"营收同比下滑 {revenue_yoy:.1f}%。核心业务在萎缩。"
+        })
+    elif revenue_yoy < 0 and net_profit < 0:
+        warnings.append({
+            "risk": "量价齐跌",
+            "level": "🟡 中度风险",
+            "desc": f"营收下滑 {revenue_yoy:.1f}% 且持续亏损，基本面恶化中。"
+        })
+    
+    # 5. 流动性检测
+    if current_ratio > 0 and current_ratio < 80:
+        warnings.append({
+            "risk": "流动性紧张",
+            "level": "🟡 中度风险",
+            "desc": f"流动比率仅 {current_ratio:.1f}%（<100%意味着流动资产无法覆盖流动负债）。"
+        })
+    
+    # 6. 增长信号
+    if revenue_yoy > 30:
+        warnings.append({
+            "risk": "高增长",
+            "level": "✅ 营收高增长",
+            "desc": f"营收同比增长 {revenue_yoy:.1f}%，处于高速扩张期。注意：高增长不一定是好事，需结合利润质量判断。"
+        })
+    
+    # --- 构建结果 ---
+    result = {
+        "symbol": pure_symbol,
+        "market": "HK",
+        "report_date": report_date,
+        "raw_data": {
+            "Revenue_营业收入_亿": round(revenue / 1e8, 2),
+            "Net_Profit_净利润_亿": round(net_profit / 1e8, 2),
+            "Operating_CF_经营现金流_亿": round(operating_cf / 1e8, 2) if operating_cf else "数据不可用",
+            "BPS_每股净资产": round(bps, 2),
+            "EPS_每股收益": round(basic_eps, 2),
+            "Gross_Margin_毛利率": f"{gross_profit_ratio:.1f}%",
+            "Net_Margin_净利率": f"{net_profit_ratio:.1f}%",
+            "ROE": f"{roe:.1f}%",
+            "ROA": f"{roa:.1f}%",
+            "Debt_Ratio_资产负债率": f"{debt_asset_ratio:.1f}%",
+            "Current_Ratio_流动比率": f"{current_ratio:.1f}%",
+            "Revenue_YoY_营收同比": f"{revenue_yoy:.1f}%",
+            "Total_Market_Cap_亿港元": round(total_market_cap / 1e8, 2) if total_market_cap else "数据不可用",
+        },
+        "hk_note": "港股财报采用东方财富数据源，缺少资产负债表明细（商誉、应收、现金等）。部分风险指标无法检测。",
+        "warnings": warnings,
+    }
+    
+    has_fatal = any("极高风险" in w['level'] for w in warnings)
+    has_warning = any("高风险" in w['level'] or "中度风险" in w['level'] for w in warnings)
+    
+    if has_fatal:
+        result["verdict"] = "❌ 致命雷区 (极高暴雷/退市风险，建议一票否决)"
+    elif has_warning:
+        result["verdict"] = "🟡 存在瑕疵 (需结合技术面严格止损)"
+    else:
+        result["verdict"] = "💰 无致命雷区 (可专注技术面交易)"
+    
+    return result
+
 
 def fetch_financial_data(pure_symbol):
     """
@@ -58,7 +242,14 @@ def fetch_top_shareholders(pure_symbol):
     """
     获取前十大股东（包含责任链兜底）
     """
-    prefix = 'sh' if pure_symbol.startswith('6') else 'sz' if pure_symbol.startswith(('0', '3')) else 'bj'
+    if pure_symbol.startswith('920'):
+        prefix = 'bj'
+    elif pure_symbol.startswith(('6', '9')):
+        prefix = 'sh'
+    elif pure_symbol.startswith(('8', '4')):
+        prefix = 'bj'
+    else:
+        prefix = 'sz'
     full_symbol = prefix + pure_symbol
     try:
         # 优先级1：十大股东
@@ -80,6 +271,10 @@ def fetch_top_shareholders(pure_symbol):
 
 def analyze_fundamentals(symbol):
     pure_symbol = parse_symbol(symbol)
+    
+    # 港股走独立分析路径
+    if is_hk_stock(symbol):
+        return analyze_hk_fundamentals(pure_symbol, symbol)
     
     try:
         df_bs, df_is, df_cf, source = fetch_financial_data(pure_symbol)

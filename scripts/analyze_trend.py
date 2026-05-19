@@ -36,6 +36,70 @@ def fetch_from_tencent(symbol):
         return pd.DataFrame()
 
 
+def fetch_from_baidu(symbol):
+    """
+    Fallback method to fetch historical daily K-lines from Baidu Gushitong.
+    Specifically useful for US stocks where Tencent's daily K-line returns corrupt/incomplete data.
+    """
+    # Baidu needs the raw ticker for US stocks (e.g. AAPL), 5 digits for HK (e.g. 00700)
+    # A-shares (e.g. 600519) and BJ stocks (e.g. 920002) should keep their 6 digits without prefix.
+    code = symbol
+    if symbol.startswith(('sh', 'sz', 'bj', 'hk', 'us')):
+        code = symbol[2:]
+
+    url = "https://finance.pae.baidu.com/selfselect/getstockquotation"
+    params = {
+        "all": "1",
+        "isIndex": "false",
+        "isBk": "false",
+        "isBlock": "false",
+        "isFutures": "false",
+        "isStock": "true",
+        "newFormat": "1",
+        "group": "quotation_kline_ab",
+        "finClientType": "pc",
+        "code": code,
+        "start_time": "",
+        "ktype": "1",
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/vnd.finance-web.v1+json",
+        "Origin": "https://gushitong.baidu.com",
+        "Referer": "https://gushitong.baidu.com/",
+    }
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        d = r.json()
+        result = d.get("Result", {})
+        if not isinstance(result, dict):
+            return pd.DataFrame()
+        md = result.get("newMarketData", {})
+        rows = md.get("marketData", "").split(";")
+        if not rows or len(rows) < 2 or rows[0] == "":
+            return pd.DataFrame()
+            
+        kline_list = []
+        for r_str in rows:
+            if not r_str:
+                continue
+            parts = r_str.split(",")
+            if len(parts) >= 7:
+                # Baidu format keys: timestamp, time, open, close, volume, high, low
+                # We map to: 日期(time), 开盘(open), 收盘(close), 最高(high), 最低(low), 成交量(volume)
+                kline_list.append([parts[1], parts[2], parts[3], parts[5], parts[6], parts[4]])
+                
+        if not kline_list:
+            return pd.DataFrame()
+            
+        df = pd.DataFrame(kline_list, columns=["日期", "开盘", "收盘", "最高", "最低", "成交量"])
+        for col in ["开盘", "收盘", "最高", "最低", "成交量"]:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 # ──────────────────────────────────────────────
 # Volume Analysis Helpers
 # ──────────────────────────────────────────────
@@ -385,21 +449,43 @@ def detect_macro_patterns(df, target_idx):
 # Main Analysis (supports --date)
 # ──────────────────────────────────────────────
 
+def standardize_symbol(symbol):
+    """
+    Standardize symbol format (e.g. 600519 -> sh600519, 920002 -> bj920002, AAPL -> usAAPL).
+    Returns standardized lowercase symbol (except US which keeps upper symbol in prefix e.g. usAAPL).
+    """
+    symbol = symbol.strip()
+    # Handle US alphabet-only symbol
+    if symbol.isalpha():
+        return 'us' + symbol.upper()
+        
+    symbol_lower = symbol.lower()
+    
+    # If already prefixed, return standardized format
+    if symbol_lower.startswith(('sh', 'sz', 'bj', 'hk', 'us')):
+        if symbol_lower.startswith('us'):
+            return 'us' + symbol[2:].upper()
+        return symbol_lower
+
+    if symbol.isdigit() and len(symbol) == 6:
+        if symbol.startswith('920'):
+            return 'bj' + symbol
+        elif symbol.startswith(('6', '9', '5')): # 900 B-shares, 5xx ETFs/funds, 6xx A-shares
+            return 'sh' + symbol
+        elif symbol.startswith(('8', '4')):
+            return 'bj' + symbol
+        else:
+            return 'sz' + symbol
+            
+    return symbol_lower
+
+
 def fetch_data(symbol):
     """
     Fetch stock data, parse symbol, calculate MAs. Returns (prefixed_symbol, df) or raises.
     """
     original_symbol = symbol.strip()
-
-    # Parse Symbol and standardize prefix
-    if symbol.isdigit() and len(symbol) == 6:
-        if symbol.startswith('6') or symbol.startswith('5'):
-            symbol = 'sh' + symbol
-        else:
-            symbol = 'sz' + symbol
-    elif symbol.isalpha():
-        symbol = 'us' + symbol.upper()
-    # otherwise assume it already has 'hk', 'us', 'sh', 'sz' prefixes
+    symbol = standardize_symbol(original_symbol)
 
     end_date = datetime.now().strftime("%Y%m%d")
     start_date = (datetime.now() - timedelta(days=500)).strftime("%Y%m%d")
@@ -408,9 +494,30 @@ def fetch_data(symbol):
 
     # Try akshare first
     try:
-        if symbol.startswith('sh') or symbol.startswith('sz'):
+        if symbol.startswith(('sh', 'sz')):
+            pure_symbol = symbol[2:]
+            # Try as stock first
+            try:
+                df = ak.stock_zh_a_hist(
+                    symbol=pure_symbol,
+                    period="daily", start_date=start_date, end_date=end_date, adjust="qfq"
+                )
+            except Exception:
+                pass
+            
+            # Try as index if stock failed or returned empty
+            if df.empty:
+                try:
+                    df = ak.index_zh_a_hist(
+                        symbol=pure_symbol,
+                        period="daily", start_date=start_date, end_date=end_date
+                    )
+                except Exception:
+                    pass
+        elif symbol.startswith('bj'):
+            pure_symbol = symbol[2:]
             df = ak.stock_zh_a_hist(
-                symbol=symbol.replace('sh', '').replace('sz', ''),
+                symbol=pure_symbol,
                 period="daily", start_date=start_date, end_date=end_date, adjust="qfq"
             )
         elif symbol.startswith('hk'):
@@ -431,8 +538,12 @@ def fetch_data(symbol):
     if df.empty:
         df = fetch_from_tencent(symbol)
 
+    # Fallback to Baidu if Tencent also failed or returned incomplete data (e.g. US stocks only returning 2 rows)
+    if df.empty or len(df) < 10:
+        df = fetch_from_baidu(symbol)
+
     if df.empty:
-        raise ValueError(f"No data for {original_symbol} ({symbol}). Both Akshare and Tencent failed.")
+        raise ValueError(f"No data for {original_symbol} ({symbol}). Akshare, Tencent, and Baidu all failed.")
 
     # Calculate Moving Averages
     df['MA10'] = df['收盘'].rolling(window=10).mean()
